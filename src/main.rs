@@ -118,23 +118,6 @@ fn draw_image(
     Image::from_rgba8(ctx, bounds.0 as u16, bounds.0 as u16, &pixels).unwrap()
 }
 
-fn main() {
-    let win_size: (usize, usize) = (1024, 1024);
-
-    let (mut ctx, mut events_loop) = ContextBuilder::new("Mandlebrot", "Daniel Eisen")
-        .window_mode(conf::WindowMode::default().dimensions(win_size.0 as f32, win_size.1 as f32))
-        .window_setup(conf::WindowSetup::default().samples(conf::NumSamples::Eight))
-        .build()
-        .expect("Failed to create context");
-
-    let mut state = State::new(&mut ctx, win_size);
-
-    match event::run(&mut ctx, &mut events_loop, &mut state) {
-        Ok(_) => println!("Exited Cleanly "),
-        Err(e) => println!("Error: {}", e),
-    }
-}
-
 struct State {
     bounds: (usize, usize),
     upper_left: Complex<f64>,
@@ -229,5 +212,22 @@ impl event::EventHandler for State {
             self.upper_left += diag;
             self.lower_right -= diag;
         }
+    }
+}
+
+fn main() {
+    let win_size: (usize, usize) = (1024, 1024);
+
+    let (mut ctx, mut events_loop) = ContextBuilder::new("Mandlebrot", "Daniel Eisen")
+        .window_mode(conf::WindowMode::default().dimensions(win_size.0 as f32, win_size.1 as f32))
+        .window_setup(conf::WindowSetup::default().samples(conf::NumSamples::Eight))
+        .build()
+        .expect("Failed to create context");
+
+    let mut state = State::new(&mut ctx, win_size);
+
+    match event::run(&mut ctx, &mut events_loop, &mut state) {
+        Ok(_) => println!("Exited Cleanly "),
+        Err(e) => println!("Error: {}", e),
     }
 }
