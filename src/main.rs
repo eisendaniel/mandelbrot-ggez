@@ -1,15 +1,28 @@
-use ggez::{
-    conf, event,
-    graphics::{self, Image},
-    input::keyboard,
-    nalgebra as na, Context, ContextBuilder, GameResult,
-};
+use ggez::{Context, ContextBuilder, GameResult, conf, event, graphics::{self, Image}, input, nalgebra as na, timer};
 use image::{png::PngEncoder, ColorType, ImageError};
 use num::Complex;
 use rayon::prelude::*;
-use std::fs::File;
+use std::{fs::File, usize};
 use std::io::Write;
 use std::str::FromStr;
+/// Try to determine if `c` is in the Mandelbrot set, using at most `limit`
+/// iterations to decide.
+///
+/// If `c` is not a member, return `Some(i)`, where `i` is the number of
+/// iterations it took for `c` to leave the circle of radius two centered on the
+/// origin. If `c` seems to be a member (more precisely, if we reached the
+/// iteration limit without being able to prove that `c` is not a member),
+/// return `None`.
+fn escape_time(c: Complex<f64>, limit: u32) -> Option<u32> {
+    let mut z = Complex { re: 0.0, im: 0.0 };
+    for i in 0..limit {
+        z = z * z + c;
+        if z.norm_sqr() > 4.0 {
+            return Some(i);
+        }
+    }
+    None
+}
 
 /// Parse the string `s` as a coordinate pair, like `"400x600"` or `"1.0,0.5"`.
 ///
@@ -38,25 +51,6 @@ fn parse_complex(s: &str) -> Option<Complex<f64>> {
     }
 }
 
-/// Try to determine if `c` is in the Mandelbrot set, using at most `limit`
-/// iterations to decide.
-///
-/// If `c` is not a member, return `Some(i)`, where `i` is the number of
-/// iterations it took for `c` to leave the circle of radius two centered on the
-/// origin. If `c` seems to be a member (more precisely, if we reached the
-/// iteration limit without being able to prove that `c` is not a member),
-/// return `None`.
-fn escape_time(c: Complex<f64>, limit: u32) -> Option<u32> {
-    let mut z = Complex { re: 0.0, im: 0.0 };
-    for i in 0..limit {
-        z = z * z + c;
-        if z.norm_sqr() > 4.0 {
-            return Some(i);
-        }
-    }
-    None
-}
-
 /// Given the row and column of a pixel in the output image, return the
 /// corresponding point on the complex plane.
 ///
@@ -80,6 +74,7 @@ fn pixel_to_point(
                                                                        // but the imaginary component increases as we go up.
     }
 }
+
 /// Render a rectangle of the Mandelbrot set into a buffer of pixels.
 ///
 /// The `bounds` argument gives the width and height of the buffer `pixels`,
@@ -99,12 +94,37 @@ fn render(
                 None => 255,
                 Some(count) => count as u8,
             };
-            pixels[4 * (row * bounds.0 + column)] = 255;
-            pixels[(4 * (row * bounds.0 + column)) + 1] = 255;
-            pixels[(4 * (row * bounds.0 + column)) + 2] = 255;
-            pixels[(4 * (row * bounds.0 + column)) + 3] = alpha;
+            pixels[4 * (row * bounds.0 + column) + 0] = 255;
+            pixels[4 * (row * bounds.0 + column) + 1] = 255;
+            pixels[4 * (row * bounds.0 + column) + 2] = 255;
+            pixels[4 * (row * bounds.0 + column) + 3] = alpha;
         }
     }
+}
+
+fn draw_image(
+    ctx: &mut Context,
+    bounds: (usize, usize),
+    upper_left: Complex<f64>,
+    lower_right: Complex<f64>,
+) -> graphics::Image {
+    let mut pixels = vec![0; 4 * bounds.0 * bounds.1];
+
+    // Scope of slicing up `pixels` into horizontal bands.
+    {
+        let bands: Vec<(usize, &mut [u8])> = pixels.chunks_mut(4 * bounds.0).enumerate().collect();
+
+        bands.into_par_iter().for_each(|(i, band)| {
+            let top = i;
+            let band_bounds = (bounds.0, 1);
+            let band_upper_left = pixel_to_point(bounds, (0, top), upper_left, lower_right);
+            let band_lower_right =
+                pixel_to_point(bounds, (bounds.0, top + 1), upper_left, lower_right);
+            render(band, band_bounds, band_upper_left, band_lower_right);
+        });
+    }
+
+    graphics::Image::from_rgba8(ctx, bounds.0 as u16, bounds.0 as u16, &pixels).unwrap()
 }
 
 /// Write the buffer `pixels`, whose dimensions are given by `bounds`, to the
@@ -122,107 +142,63 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() != 5 {
-        match writeln!(
+        writeln!(
             std::io::stderr(),
             "Usage: mandelbrot FILE PIXELS UPPERLEFT LOWERRIGHT"
-        ) {
-            Ok(a) => a,
-            _ => unreachable!(),
-        };
-        match writeln!(
+        )
+        .unwrap();
+        writeln!(
             std::io::stderr(),
             "Example: {} mandel.png 1000x750 -1.20,0.35 -1,0.20",
             args[0]
-        ) {
-            Ok(a) => a,
-            _ => unreachable!(),
-        };
+        )
+        .unwrap();
         std::process::exit(1);
     }
 
-    let bounds = parse_pair(&args[2], 'x').expect("error parsing image dimensions");
-    let upper_left = parse_complex(&args[3]).expect("error parsing upper left corner point");
-    let lower_right = parse_complex(&args[4]).expect("error parsing lower right corner point");
-
-    let mut pixels = vec![0; 4 * bounds.0 * bounds.1];
-
-    // Scope of slicing up `pixels` into horizontal bands.
-    {
-        let bands: Vec<(usize, &mut [u8])> = pixels.chunks_mut(bounds.0 * 4).enumerate().collect();
-
-        bands.into_par_iter().for_each(|(i, band)| {
-            let top = i;
-            let band_bounds = (bounds.0, 1);
-            let band_upper_left = pixel_to_point(bounds, (0, top), upper_left, lower_right);
-            let band_lower_right =
-                pixel_to_point(bounds, (bounds.0, top + 1), upper_left, lower_right);
-            render(band, band_bounds, band_upper_left, band_lower_right);
-        });
-    }
-
-    write_image(&args[1], &pixels, bounds).expect("error writing PNG file");
-
-    let (mut ctx, mut events_loop) = ContextBuilder::new("GGEZ Mandelbrot", "eisendaniel")
-        .window_mode(conf::WindowMode::default().dimensions(bounds.0 as f32, bounds.1 as f32))
+    let (mut ctx, mut events_loop) = ContextBuilder::new("Mandlebrot", "Daniel Eisen")
+        .window_mode(conf::WindowMode::default().dimensions(800., 800.))
         .window_setup(conf::WindowSetup::default().samples(conf::NumSamples::Eight))
         .build()
         .expect("Failed to create context");
 
-    let mut state = Mandelbrot::new(&mut ctx, args);
+    let mut state = State::new(&mut ctx, args);
 
     match event::run(&mut ctx, &mut events_loop, &mut state) {
-        Ok(_) => println!("Exited cleanly"),
+        Ok(_) => println!("Exited Cleanly "),
         Err(e) => println!("Error: {}", e),
     }
 }
 
-struct Mandelbrot {
-    win_bounds: (usize, usize),
+struct State {
+    bounds: (usize, usize),
     upper_left: Complex<f64>,
     lower_right: Complex<f64>,
-    pixel_buf: Vec<u8>,
+    texture: graphics::Image,
 }
 
-impl Mandelbrot {
-    pub fn new(_ctx: &mut Context, args: Vec<String>) -> Mandelbrot {
-        let bounds = parse_pair(&args[2], 'x').expect("error parsing image dimensions");
-        Mandelbrot {
-            win_bounds: bounds,
+impl State {
+    pub fn new(ctx: &mut Context, args: Vec<String>) -> State {
+        State {
+            bounds: parse_pair(&args[2], 'x').expect("error parsing image dimensions"),
             upper_left: parse_complex(&args[3]).expect("error parsing upper left corner point"),
             lower_right: parse_complex(&args[4]).expect("error parsing lower right corner point"),
-            pixel_buf: vec![0; 4 * bounds.0 * bounds.1],
+            texture: graphics::Image::solid(ctx, 1, graphics::BLACK).unwrap(),
         }
     }
 }
 
-impl ggez::event::EventHandler for Mandelbrot {
-    fn update(&mut self, _ctx: &mut Context) -> GameResult<()> {
-        {
-            let bands: Vec<(usize, &mut [u8])> =
-                self.pixel_buf.chunks_mut(bounds.0 * 4).enumerate().collect();
+impl ggez::event::EventHandler for State {
+    fn update(&mut self, ctx: &mut Context) -> GameResult {
 
-            bands.into_par_iter().for_each(|(i, band)| {
-                let top = i;
-                let band_bounds = (bounds.0, 1);
-                let band_upper_left = pixel_to_point(bounds, (0, top), self.upper_left, self.lower_right);
-                let band_lower_right =
-                    pixel_to_point(bounds, (bounds.0, top + 1), self.upper_left, self.lower_right);
-                render(band, band_bounds, band_upper_left, band_lower_right);
-            });
-        }
 
+        
+        self.texture = draw_image(ctx, self.bounds, self.upper_left, self.lower_right);
         Ok(())
     }
-    fn draw(&mut self, ctx: &mut Context) -> GameResult<()> {
+    fn draw(&mut self, ctx: &mut Context) -> GameResult {
         graphics::clear(ctx, graphics::BLACK);
-        let texture = graphics::Image::from_rgba8(
-            ctx,
-            self.win_bounds.0 as u16,
-            self.win_bounds.1 as u16,
-            &self.pixel_buf,
-        )
-        .unwrap();
-        graphics::draw(ctx, &texture, graphics::DrawParam::new())?;
+        graphics::draw(ctx, &self.texture, graphics::DrawParam::new())?;
         graphics::present(ctx)
     }
 }
