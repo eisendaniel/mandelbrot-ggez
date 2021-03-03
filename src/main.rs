@@ -1,10 +1,14 @@
-use ggez::{Context, ContextBuilder, GameResult, conf, event, graphics::{self, Image}, input, nalgebra as na, timer};
-use image::{png::PngEncoder, ColorType, ImageError};
+use std::usize;
+
+use ggez::{
+    conf,
+    event::{self, MouseButton},
+    graphics::{self, Image},
+    input, Context, ContextBuilder, GameResult,
+};
 use num::Complex;
+use palette::rgb::Srgb;
 use rayon::prelude::*;
-use std::{fs::File, usize};
-use std::io::Write;
-use std::str::FromStr;
 /// Try to determine if `c` is in the Mandelbrot set, using at most `limit`
 /// iterations to decide.
 ///
@@ -22,33 +26,6 @@ fn escape_time(c: Complex<f64>, limit: u32) -> Option<u32> {
         }
     }
     None
-}
-
-/// Parse the string `s` as a coordinate pair, like `"400x600"` or `"1.0,0.5"`.
-///
-/// Specifically, `s` should have the form <left><sep><right>, where <sep> is
-/// the character given by the `separator` argument, and <left> and <right> are both
-/// strings that can be parsed by `T::from_str`.
-///
-/// If `s` has the proper form, return `Some<(x, y)>`. If it doesn't parse
-/// correctly, return `None`.
-fn parse_pair<T: FromStr>(s: &str, separator: char) -> Option<(T, T)> {
-    match s.find(separator) {
-        None => None,
-        Some(index) => match (T::from_str(&s[..index]), T::from_str(&s[index + 1..])) {
-            (Ok(l), Ok(r)) => Some((l, r)),
-            _ => None,
-        },
-    }
-}
-
-/// Parse a pair of floating-point numbers separated by a comma as a complex
-/// number.
-fn parse_complex(s: &str) -> Option<Complex<f64>> {
-    match parse_pair(s, ',') {
-        Some((re, im)) => Some(Complex { re, im }),
-        None => None,
-    }
 }
 
 /// Given the row and column of a pixel in the output image, return the
@@ -90,14 +67,28 @@ fn render(
     for row in 0..bounds.1 {
         for column in 0..bounds.0 {
             let point = pixel_to_point(bounds, (column, row), upper_left, lower_right);
-            let alpha = match escape_time(point, 255) {
-                None => 255,
-                Some(count) => count as u8,
+            let val = match escape_time(point, 255) {
+                None => 0,
+                Some(count) => 255 - count as u8,
             };
-            pixels[4 * (row * bounds.0 + column) + 0] = 255;
-            pixels[4 * (row * bounds.0 + column) + 1] = 255;
-            pixels[4 * (row * bounds.0 + column) + 2] = 255;
-            pixels[4 * (row * bounds.0 + column) + 3] = alpha;
+            let is_c = true;
+            if is_c {
+                let col = Srgb::from(palette::Hsv::new(
+                    360. * (val as f64 / 255.),
+                    1.,
+                    1. * (if val == 0 { 0. } else { 1. }),
+                ));
+
+                pixels[4 * (row * bounds.0 + column)] = (col.red * 255.) as u8;
+                pixels[4 * (row * bounds.0 + column) + 1] = (col.green * 255.) as u8;
+                pixels[4 * (row * bounds.0 + column) + 2] = (col.blue * 255.) as u8;
+                pixels[4 * (row * bounds.0 + column) + 3] = 255;
+            } else {
+                pixels[4 * (row * bounds.0 + column)] = val;
+                pixels[4 * (row * bounds.0 + column) + 1] = val;
+                pixels[4 * (row * bounds.0 + column) + 2] = val;
+                pixels[4 * (row * bounds.0 + column) + 3] = 255;
+            }
         }
     }
 }
@@ -124,45 +115,19 @@ fn draw_image(
         });
     }
 
-    graphics::Image::from_rgba8(ctx, bounds.0 as u16, bounds.0 as u16, &pixels).unwrap()
-}
-
-/// Write the buffer `pixels`, whose dimensions are given by `bounds`, to the
-/// file named `filename`.
-fn write_image(filename: &str, pixels: &[u8], bounds: (usize, usize)) -> Result<(), ImageError> {
-    let output = File::create(filename)?;
-
-    let encoder = PngEncoder::new(output);
-    encoder.encode(&pixels, bounds.0 as u32, bounds.1 as u32, ColorType::Rgba8)?;
-
-    Ok(())
+    Image::from_rgba8(ctx, bounds.0 as u16, bounds.0 as u16, &pixels).unwrap()
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() != 5 {
-        writeln!(
-            std::io::stderr(),
-            "Usage: mandelbrot FILE PIXELS UPPERLEFT LOWERRIGHT"
-        )
-        .unwrap();
-        writeln!(
-            std::io::stderr(),
-            "Example: {} mandel.png 1000x750 -1.20,0.35 -1,0.20",
-            args[0]
-        )
-        .unwrap();
-        std::process::exit(1);
-    }
+    let win_size: (usize, usize) = (1024, 1024);
 
     let (mut ctx, mut events_loop) = ContextBuilder::new("Mandlebrot", "Daniel Eisen")
-        .window_mode(conf::WindowMode::default().dimensions(800., 800.))
+        .window_mode(conf::WindowMode::default().dimensions(win_size.0 as f32, win_size.1 as f32))
         .window_setup(conf::WindowSetup::default().samples(conf::NumSamples::Eight))
         .build()
         .expect("Failed to create context");
 
-    let mut state = State::new(&mut ctx, args);
+    let mut state = State::new(&mut ctx, win_size);
 
     match event::run(&mut ctx, &mut events_loop, &mut state) {
         Ok(_) => println!("Exited Cleanly "),
@@ -174,31 +139,95 @@ struct State {
     bounds: (usize, usize),
     upper_left: Complex<f64>,
     lower_right: Complex<f64>,
-    texture: graphics::Image,
+    texture: Image,
+    mouse_pressed: bool,
+    mouse_released: bool,
 }
 
 impl State {
-    pub fn new(ctx: &mut Context, args: Vec<String>) -> State {
+    pub fn new(ctx: &mut Context, init_bounds: (usize, usize)) -> State {
         State {
-            bounds: parse_pair(&args[2], 'x').expect("error parsing image dimensions"),
-            upper_left: parse_complex(&args[3]).expect("error parsing upper left corner point"),
-            lower_right: parse_complex(&args[4]).expect("error parsing lower right corner point"),
-            texture: graphics::Image::solid(ctx, 1, graphics::BLACK).unwrap(),
+            bounds: init_bounds,
+            upper_left: Complex::new(-3., 2.),
+            lower_right: Complex::new(1., -2.),
+            texture: draw_image(
+                ctx,
+                init_bounds,
+                Complex::new(-3., 2.),
+                Complex::new(1., -2.),
+            ),
+            mouse_pressed: false,
+            mouse_released: false,
         }
     }
 }
 
-impl ggez::event::EventHandler for State {
+impl event::EventHandler for State {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
-
-
-        
-        self.texture = draw_image(ctx, self.bounds, self.upper_left, self.lower_right);
+        if input::keyboard::is_key_pressed(ctx, input::keyboard::KeyCode::Space) {
+            self.upper_left = Complex::new(-3., 2.);
+            self.lower_right = Complex::new(1., -2.);
+            self.texture = draw_image(ctx, self.bounds, self.upper_left, self.lower_right);
+        }
+        if self.mouse_released {
+            self.texture = draw_image(ctx, self.bounds, self.upper_left, self.lower_right);
+            self.mouse_released = false;
+        }
         Ok(())
     }
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         graphics::clear(ctx, graphics::BLACK);
         graphics::draw(ctx, &self.texture, graphics::DrawParam::new())?;
+
+        if self.mouse_pressed {
+            let cursor = input::mouse::position(ctx);
+            let rect = graphics::Mesh::new_rectangle(
+                ctx,
+                graphics::DrawMode::fill(),
+                graphics::Rect::new(cursor.x - 100., cursor.y - 100., 200., 200.),
+                [1., 1., 1., 0.2].into(),
+            )?;
+            graphics::draw(ctx, &rect, graphics::DrawParam::new())?;
+        }
+
         graphics::present(ctx)
+    }
+
+    fn mouse_button_down_event(
+        &mut self,
+        _ctx: &mut Context,
+        button: MouseButton,
+        _x: f32,
+        _y: f32,
+    ) {
+        if button == MouseButton::Left {
+            self.mouse_pressed = true;
+        }
+    }
+
+    fn mouse_button_up_event(&mut self, _ctx: &mut Context, button: MouseButton, x: f32, y: f32) {
+        self.mouse_released = true;
+        self.mouse_pressed = false;
+
+        if button == MouseButton::Left {
+            let new_u_l = pixel_to_point(
+                self.bounds,
+                ((x - 100.) as usize, (y - 100.) as usize),
+                self.upper_left,
+                self.lower_right,
+            );
+            let new_l_r = pixel_to_point(
+                self.bounds,
+                ((x + 100.) as usize, (y + 100.) as usize),
+                self.upper_left,
+                self.lower_right,
+            );
+            self.upper_left = new_u_l;
+            self.lower_right = new_l_r;
+        } else if button == MouseButton::Right {
+            let diag = self.upper_left - self.lower_right;
+            self.upper_left += diag;
+            self.lower_right -= diag;
+        }
     }
 }
