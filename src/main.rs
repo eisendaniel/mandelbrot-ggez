@@ -59,6 +59,7 @@ fn pixel_to_point(
 /// arguments specify points on the complex plane corresponding to the upper-
 /// left and lower-right corners of the pixel buffer.
 fn render(
+    time_limit: u32,
     pixels: &mut [u8],
     bounds: (usize, usize),
     upper_left: Complex<f64>,
@@ -67,34 +68,27 @@ fn render(
     for row in 0..bounds.1 {
         for column in 0..bounds.0 {
             let point = pixel_to_point(bounds, (column, row), upper_left, lower_right);
-            let val = match escape_time(point, 255) {
+            let val = match escape_time(point, time_limit) {
                 None => 0,
-                Some(count) => 255 - count as u8,
+                Some(count) => time_limit - count,
             };
-            let is_c = true;
-            if is_c {
-                let col = Srgb::from(palette::Hsv::new(
-                    360. * (val as f64 / 255.),
-                    1.,
-                    1. * (if val == 0 { 0. } else { 1. }),
-                ));
+            let col = Srgb::from(palette::Hsv::new(
+                360. * (val as f64 / time_limit as f64),
+                1.,
+                1. * (if val == 0 { 0. } else { 1. }),
+            ));
 
-                pixels[4 * (row * bounds.0 + column)] = (col.red * 255.) as u8;
-                pixels[4 * (row * bounds.0 + column) + 1] = (col.green * 255.) as u8;
-                pixels[4 * (row * bounds.0 + column) + 2] = (col.blue * 255.) as u8;
-                pixels[4 * (row * bounds.0 + column) + 3] = 255;
-            } else {
-                pixels[4 * (row * bounds.0 + column)] = val;
-                pixels[4 * (row * bounds.0 + column) + 1] = val;
-                pixels[4 * (row * bounds.0 + column) + 2] = val;
-                pixels[4 * (row * bounds.0 + column) + 3] = 255;
-            }
+            pixels[4 * (row * bounds.0 + column)] = (col.red * 255.) as u8;
+            pixels[4 * (row * bounds.0 + column) + 1] = (col.green * 255.) as u8;
+            pixels[4 * (row * bounds.0 + column) + 2] = (col.blue * 255.) as u8;
+            pixels[4 * (row * bounds.0 + column) + 3] = 255;
         }
     }
 }
 
 fn draw_image(
     ctx: &mut Context,
+    time_limit: u32,
     bounds: (usize, usize),
     upper_left: Complex<f64>,
     lower_right: Complex<f64>,
@@ -111,7 +105,13 @@ fn draw_image(
             let band_upper_left = pixel_to_point(bounds, (0, top), upper_left, lower_right);
             let band_lower_right =
                 pixel_to_point(bounds, (bounds.0, top + 1), upper_left, lower_right);
-            render(band, band_bounds, band_upper_left, band_lower_right);
+            render(
+                time_limit,
+                band,
+                band_bounds,
+                band_upper_left,
+                band_lower_right,
+            );
         });
     }
 
@@ -122,9 +122,10 @@ struct State {
     bounds: (usize, usize),
     upper_left: Complex<f64>,
     lower_right: Complex<f64>,
+    time_limit: u32,
     texture: Image,
     mouse_pressed: bool,
-    mouse_released: bool,
+    update_event: bool,
 }
 
 impl State {
@@ -133,14 +134,16 @@ impl State {
             bounds: init_bounds,
             upper_left: Complex::new(-3., 2.),
             lower_right: Complex::new(1., -2.),
+            time_limit: 256,
             texture: draw_image(
                 ctx,
+                256,
                 init_bounds,
                 Complex::new(-3., 2.),
                 Complex::new(1., -2.),
             ),
             mouse_pressed: false,
-            mouse_released: false,
+            update_event: false,
         }
     }
 }
@@ -150,18 +153,26 @@ impl event::EventHandler for State {
         if input::keyboard::is_key_pressed(ctx, input::keyboard::KeyCode::Space) {
             self.upper_left = Complex::new(-3., 2.);
             self.lower_right = Complex::new(1., -2.);
-            self.texture = draw_image(ctx, self.bounds, self.upper_left, self.lower_right);
+            self.update_event = true;
         }
-        if self.mouse_released {
-            self.texture = draw_image(ctx, self.bounds, self.upper_left, self.lower_right);
-            self.mouse_released = false;
+        if self.update_event {
+            self.texture = draw_image(
+                ctx,
+                self.time_limit,
+                self.bounds,
+                self.upper_left,
+                self.lower_right,
+            );
+            self.update_event = false;
         }
         Ok(())
     }
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         graphics::clear(ctx, graphics::BLACK);
+        //draw texture sprite
         graphics::draw(ctx, &self.texture, graphics::DrawParam::new())?;
 
+        //draw zoom bounds
         if self.mouse_pressed {
             let cursor = input::mouse::position(ctx);
             let rect = graphics::Mesh::new_rectangle(
@@ -173,7 +184,37 @@ impl event::EventHandler for State {
             graphics::draw(ctx, &rect, graphics::DrawParam::new())?;
         }
 
+        //draw time_limit text
+        let time_limit_text = graphics::Text::new(graphics::TextFragment {
+            text: self.time_limit.to_string(),
+            color: Some(graphics::WHITE),
+            font: Some(graphics::Font::default()),
+            scale: Some(graphics::Scale::uniform(10.0)),
+        });
+        // let text_pos = na::Point2::new(0,0);
+
+        graphics::draw(ctx, &time_limit_text, graphics::DrawParam::new())?;
+
         graphics::present(ctx)
+    }
+
+    fn key_up_event(
+        &mut self,
+        _ctx: &mut Context,
+        keycode: input::keyboard::KeyCode,
+        _keymods: input::keyboard::KeyMods,
+    ) {
+        match keycode {
+            input::keyboard::KeyCode::Right => {
+                self.time_limit *= 2;
+                self.update_event = true;
+            }
+            input::keyboard::KeyCode::Left => {
+                self.time_limit /= if self.time_limit / 2 < 1 { 1 } else { 2 };
+                self.update_event = true;
+            }
+            _ => (),
+        }
     }
 
     fn mouse_button_down_event(
@@ -189,34 +230,38 @@ impl event::EventHandler for State {
     }
 
     fn mouse_button_up_event(&mut self, _ctx: &mut Context, button: MouseButton, x: f32, y: f32) {
-        self.mouse_released = true;
         self.mouse_pressed = false;
+        self.update_event = true;
 
-        if button == MouseButton::Left {
-            let new_u_l = pixel_to_point(
-                self.bounds,
-                ((x - 100.) as usize, (y - 100.) as usize),
-                self.upper_left,
-                self.lower_right,
-            );
-            let new_l_r = pixel_to_point(
-                self.bounds,
-                ((x + 100.) as usize, (y + 100.) as usize),
-                self.upper_left,
-                self.lower_right,
-            );
-            self.upper_left = new_u_l;
-            self.lower_right = new_l_r;
-        } else if button == MouseButton::Right {
-            let diag = self.upper_left - self.lower_right;
-            self.upper_left += diag;
-            self.lower_right -= diag;
+        match button {
+            MouseButton::Left => {
+                let new_u_l = pixel_to_point(
+                    self.bounds,
+                    ((x - 100.) as usize, (y - 100.) as usize),
+                    self.upper_left,
+                    self.lower_right,
+                );
+                let new_l_r = pixel_to_point(
+                    self.bounds,
+                    ((x + 100.) as usize, (y + 100.) as usize),
+                    self.upper_left,
+                    self.lower_right,
+                );
+                self.upper_left = new_u_l;
+                self.lower_right = new_l_r;
+            }
+            MouseButton::Right => {
+                let diag = self.upper_left - self.lower_right;
+                self.upper_left += diag;
+                self.lower_right -= diag;
+            }
+            _ => (),
         }
     }
 }
 
 fn main() {
-    let win_size: (usize, usize) = (1024, 1024);
+    let win_size: (usize, usize) = (800, 800);
 
     let (mut ctx, mut events_loop) = ContextBuilder::new("Mandlebrot", "Daniel Eisen")
         .window_mode(conf::WindowMode::default().dimensions(win_size.0 as f32, win_size.1 as f32))
