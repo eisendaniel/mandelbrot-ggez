@@ -189,7 +189,7 @@ impl event::EventHandler for State {
             text: self.time_limit.to_string(),
             color: Some(graphics::WHITE),
             font: Some(graphics::Font::default()),
-            scale: Some(graphics::Scale::uniform(10.0)),
+            scale: Some(graphics::Scale::uniform(32.0)),
         });
         // let text_pos = na::Point2::new(0,0);
 
