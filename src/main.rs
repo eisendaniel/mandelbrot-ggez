@@ -1,3 +1,6 @@
+use num::Complex;
+use palette::rgb::Srgb;
+use rayon::prelude::*;
 use std::usize;
 
 use ggez::{
@@ -6,9 +9,6 @@ use ggez::{
     graphics::{self, Image},
     input, Context, ContextBuilder, GameResult,
 };
-use num::Complex;
-use palette::rgb::Srgb;
-use rayon::prelude::*;
 /// Try to determine if `c` is in the Mandelbrot set, using at most `limit`
 /// iterations to decide.
 ///
@@ -178,7 +178,12 @@ impl event::EventHandler for State {
             let rect = graphics::Mesh::new_rectangle(
                 ctx,
                 graphics::DrawMode::fill(),
-                graphics::Rect::new(cursor.x - 100., cursor.y - 100., 200., 200.),
+                graphics::Rect::new(
+                    cursor.x - self.bounds.0 as f32 / 4.,
+                    cursor.y - self.bounds.1 as f32 / 4.,
+                    self.bounds.0 as f32 / 2.,
+                    self.bounds.1 as f32 / 2.,
+                ),
                 [1., 1., 1., 0.2].into(),
             )?;
             graphics::draw(ctx, &rect, graphics::DrawParam::new())?;
@@ -233,27 +238,24 @@ impl event::EventHandler for State {
         self.mouse_pressed = false;
         self.update_event = true;
 
+        let point = pixel_to_point(
+            self.bounds,
+            (x as usize, y as usize),
+            self.upper_left,
+            self.lower_right,
+        );
+
+        let diag = self.upper_left - self.lower_right;
+
         match button {
-            MouseButton::Left => {
-                let new_u_l = pixel_to_point(
-                    self.bounds,
-                    ((x - 100.) as usize, (y - 100.) as usize),
-                    self.upper_left,
-                    self.lower_right,
-                );
-                let new_l_r = pixel_to_point(
-                    self.bounds,
-                    ((x + 100.) as usize, (y + 100.) as usize),
-                    self.upper_left,
-                    self.lower_right,
-                );
-                self.upper_left = new_u_l;
-                self.lower_right = new_l_r;
-            }
             MouseButton::Right => {
-                let diag = self.upper_left - self.lower_right;
-                self.upper_left += diag;
-                self.lower_right -= diag;
+                self.upper_left = point + diag;
+                self.lower_right = point - diag;
+            }
+
+            MouseButton::Left => {
+                self.upper_left = point + (diag / 4.);
+                self.lower_right = point - (diag / 4.);
             }
             _ => (),
         }
@@ -265,7 +267,7 @@ fn main() {
 
     let (mut ctx, mut events_loop) = ContextBuilder::new("Mandlebrot", "Daniel Eisen")
         .window_mode(conf::WindowMode::default().dimensions(win_size.0 as f32, win_size.1 as f32))
-        .window_setup(conf::WindowSetup::default().samples(conf::NumSamples::Eight))
+        // .window_setup(conf::WindowSetup::default().samples(conf::NumSamples::Eight))
         .build()
         .expect("Failed to create context");
 
