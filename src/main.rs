@@ -9,6 +9,11 @@ use ggez::{
     graphics::{self, Image},
     input, Context, ContextBuilder, GameResult,
 };
+
+const WIN_SIZE: (usize, usize) = (1920, 1080); // set resolution
+const INIT_C: Complex<f64> = Complex::new(-1., 0.); //init centre point on C plane
+const ASPECT: f64 = WIN_SIZE.0 as f64 / WIN_SIZE.1 as f64;
+
 /// Try to determine if `c` is in the Mandelbrot set, using at most `limit`
 /// iterations to decide.
 ///
@@ -115,7 +120,7 @@ fn draw_image(
         });
     }
 
-    Image::from_rgba8(ctx, bounds.0 as u16, bounds.0 as u16, &pixels).unwrap()
+    Image::from_rgba8(ctx, bounds.0 as u16, bounds.1 as u16, &pixels).unwrap()
 }
 
 struct State {
@@ -129,19 +134,18 @@ struct State {
 }
 
 impl State {
-    pub fn new(ctx: &mut Context, init_bounds: (usize, usize)) -> State {
+    pub fn new(
+        ctx: &mut Context,
+        init_bounds: (usize, usize),
+        upper_left: Complex<f64>,
+        lower_right: Complex<f64>,
+    ) -> State {
         State {
             bounds: init_bounds,
-            upper_left: Complex::new(-3., 2.),
-            lower_right: Complex::new(1., -2.),
+            upper_left,
+            lower_right,
             time_limit: 256,
-            texture: draw_image(
-                ctx,
-                256,
-                init_bounds,
-                Complex::new(-3., 2.),
-                Complex::new(1., -2.),
-            ),
+            texture: draw_image(ctx, 256, init_bounds, upper_left, lower_right),
             mouse_pressed: false,
             update_event: false,
         }
@@ -151,8 +155,9 @@ impl State {
 impl event::EventHandler for State {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         if input::keyboard::is_key_pressed(ctx, input::keyboard::KeyCode::Space) {
-            self.upper_left = Complex::new(-3., 2.);
-            self.lower_right = Complex::new(1., -2.);
+            self.upper_left = INIT_C + Complex::new(-2. * ASPECT, 2.);
+            self.lower_right = INIT_C + Complex::new(2. * ASPECT, -2.);
+
             self.update_event = true;
         }
         if self.update_event {
@@ -263,15 +268,18 @@ impl event::EventHandler for State {
 }
 
 fn main() {
-    let win_size: (usize, usize) = (800, 800);
-
     let (mut ctx, mut events_loop) = ContextBuilder::new("Mandlebrot", "Daniel Eisen")
-        .window_mode(conf::WindowMode::default().dimensions(win_size.0 as f32, win_size.1 as f32))
+        .window_mode(conf::WindowMode::default().dimensions(WIN_SIZE.0 as f32, WIN_SIZE.1 as f32))
         // .window_setup(conf::WindowSetup::default().samples(conf::NumSamples::Eight))
         .build()
         .expect("Failed to create context");
 
-    let mut state = State::new(&mut ctx, win_size);
+    let mut state = State::new(
+        &mut ctx,
+        WIN_SIZE,
+        INIT_C + Complex::new(-2. * ASPECT, 2.),
+        INIT_C + Complex::new(2. * ASPECT, -2.),
+    );
 
     match event::run(&mut ctx, &mut events_loop, &mut state) {
         Ok(_) => println!("Exited Cleanly "),
