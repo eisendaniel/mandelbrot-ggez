@@ -10,7 +10,7 @@ use ggez::{
     input, Context, ContextBuilder, GameResult,
 };
 
-const WIN_SIZE: (usize, usize) = (1920, 1080); // set resolution
+const WIN_SIZE: (usize, usize) = (800, 800); // set resolution
 const INIT_C: Complex<f64> = Complex::new(-1., 0.); //init centre point on C plane
 const ASPECT: f64 = WIN_SIZE.0 as f64 / WIN_SIZE.1 as f64;
 
@@ -27,10 +27,10 @@ fn escape_time(c: Complex<f64>, limit: u32) -> Option<u32> {
     for i in 0..limit {
         z = z * z + c;
         if z.norm_sqr() > 4.0 {
-            return Some(i);
+            return Some(i); //Excluded C from the set in 'i' interactions.
         }
     }
-    None
+    None //Haven't excluded C from the set
 }
 
 /// Given the row and column of a pixel in the output image, return the
@@ -152,7 +152,7 @@ impl State {
     }
 }
 
-impl event::EventHandler for State {
+impl event::EventHandler for State {    
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         if input::keyboard::is_key_pressed(ctx, input::keyboard::KeyCode::Space) {
             self.upper_left = INIT_C + Complex::new(-2. * ASPECT, 2.);
@@ -270,7 +270,7 @@ impl event::EventHandler for State {
 fn main() {
     let (mut ctx, mut events_loop) = ContextBuilder::new("Mandlebrot", "Daniel Eisen")
         .window_mode(conf::WindowMode::default().dimensions(WIN_SIZE.0 as f32, WIN_SIZE.1 as f32))
-        // .window_setup(conf::WindowSetup::default().samples(conf::NumSamples::Eight))
+        .window_setup(conf::WindowSetup::default().samples(conf::NumSamples::Eight))
         .build()
         .expect("Failed to create context");
 
